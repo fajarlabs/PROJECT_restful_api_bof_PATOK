@@ -78,6 +78,24 @@ def get_stu_message_detail(offset=0, limit=10):
 
 	return stu_records
 
+def get_total_stu_message_detail():
+	stu_record = None
+	try :
+		conn = psycopg2.connect(host=PG_HOSTNAME,
+		                        port=PG_PORTNAME,
+		                        user=PG_USERNAME,
+		                        password=PG_PASSWORD,
+		                        database=PG_DATABASE)
+		cursor = conn.cursor()
+		cursor.execute('SELECT COUNT(*) as total FROM "SANS_STU_MESSAGE_DETAIL" INNER JOIN "SANS_STU_MESSAGE" ON id = stu_id')
+		stu_record = cursor.fetchone() 
+		cursor.close()
+		conn.close()
+	except Exception as e :
+		print(e)
+
+	return stu_record
+
 class ItemRequest(BaseModel):
     limit: int = 0
     offset: int = 0
@@ -146,7 +164,7 @@ def read_current_user(item: ItemRequest, username: str = Depends(get_current_use
 				'gps' : row[32], 
 				'payload' : row[33]
 			})
-	return {"data": data}
+	return {"data": data, "total_all_data": get_total_stu_message_detail() }
 
 if __name__ == "__main__":
 	uvicorn.run("restful_api:app",host="0.0.0.0", port=8081, reload=True, access_log=False)
