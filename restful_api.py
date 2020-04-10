@@ -5,22 +5,10 @@ from pydantic import BaseModel
 import secrets
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-import psycopg2
 import sys
-import configparser
-
-try :
-	config = configparser.ConfigParser()
-	config.read('setting.ini')
-	# DATABASE ACCOUNT
-	PG_USERNAME = config['DATABASE']['username']
-	PG_PASSWORD = config['DATABASE']['password']
-	PG_PORTNAME = config['DATABASE']['portname']
-	PG_HOSTNAME = config['DATABASE']['hostname']
-	PG_DATABASE = config['DATABASE']['database']
-except Exception as e :
-	print(e)
-	sys.exit()
+from db import *
+from calculator import *
+from datetime import datetime
 
 app = FastAPI()
 security = HTTPBasic()
@@ -33,72 +21,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_userpass(username, password):
-	stu_records = []
-	try :
-		conn = psycopg2.connect(host=PG_HOSTNAME,
-		                        port=PG_PORTNAME,
-		                        user=PG_USERNAME,
-		                        password=PG_PASSWORD,
-		                        database=PG_DATABASE)
-		cursor = conn.cursor()
-		cursor.execute('SELECT username, password, is_active, is_expired, expired_date FROM "SANS_API" WHERE \
-			username = \'%s\' AND password = \'%s\' ' % (username, password))
-		stu_records = cursor.fetchall() 
-		cursor.close()
-		conn.close()
-	except Exception as e :
-		print(e)
-
-	return stu_records
-
-def get_stu_message_detail(offset=0, limit=10):
-	stu_records = []
-	try :
-		conn = psycopg2.connect(host=PG_HOSTNAME,
-		                        port=PG_PORTNAME,
-		                        user=PG_USERNAME,
-		                        password=PG_PASSWORD,
-		                        database=PG_DATABASE)
-		cursor = conn.cursor()
-		cursor.execute('SELECT stu_id, latitude, longitude, msg_type_1, subtype, msg_type_2,\
-			message_type, umn, battery, gps_valid, miss_contact_1, miss_contact_2,\
-			gps_fail_count, battery_contact_status, motion, fix_confidence, tx_perburst,\
-			gps_fault, transmitter_fault, scheduller_fault, min_interval, max_interval,\
-			gps_mean_search_time, gps_fail_count_2, transmition_count, accumulate_contact_1,\
-			accumulate_contact_2, accumulate_vibration, contact_1_count, contact_2_count, \
-			esn, unixTime, gps, payload \
-			FROM "SANS_STU_MESSAGE_DETAIL" INNER JOIN "SANS_STU_MESSAGE" ON id = stu_id \
-			OFFSET %s LIMIT %s ' % (offset, limit))
-		stu_records = cursor.fetchall() 
-		cursor.close()
-		conn.close()
-	except Exception as e :
-		print(e)
-
-	return stu_records
-
-def get_total_stu_message_detail():
-	stu_record = None
-	try :
-		conn = psycopg2.connect(host=PG_HOSTNAME,
-		                        port=PG_PORTNAME,
-		                        user=PG_USERNAME,
-		                        password=PG_PASSWORD,
-		                        database=PG_DATABASE)
-		cursor = conn.cursor()
-		cursor.execute('SELECT COUNT(*) as total FROM "SANS_STU_MESSAGE_DETAIL" INNER JOIN "SANS_STU_MESSAGE" ON id = stu_id')
-		stu_record = cursor.fetchone() 
-		cursor.close()
-		conn.close()
-	except Exception as e :
-		print(e)
-
-	return stu_record
-
 class ItemRequest(BaseModel):
     limit: int = 0
     offset: int = 0
+    is_read: bool = False
+
+class DeviceRequest(BaseModel):
+    esn: str = ''
+
+class RangeRequest(BaseModel):
+    start_date: str = ''
+    end_date: str = ''
 
 def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
 	correct_username = False
@@ -121,6 +54,52 @@ def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
 @app.get("/")
 def read_root():
     return {"status": "ok","description": "Worker API is active"}
+
+@app.put("/consume/last_position")
+def calculate_position(item: DeviceRequest, username: str = Depends(get_current_username)):
+	data = []
+	if item.esn == '':
+		for esn in get_esn_all():
+			ls = get_coordinate_detail(esn[0], 0, 2)
+			distance = countDistanceFromLatLon(ls[1][0], ls[1][1], ls[0][0], ls[0][1])
+			# 2020-03-25 01:03:54.994591
+			velocity = calcVelocity(distance, ls[1][2], ls[0][2])
+			print(type(velocity))
+			data.append({ 
+				"esn" : esn[0], 
+				"start_timestamp" : ls[1][2],
+				"last_timestamp" : ls[0][2],
+				"start_latitude" : ls[1][0],
+				"start_longitude" : ls[1][1],
+				"end_latitude" : ls[0][0],
+				"end_longitude" : ls[0][1],
+				"distance" : round(distance*1000,2),
+				"velocity" : velocity
+			})
+	if item.esn != '' :
+		ls = get_coordinate_detail(esn[0], 0, 2)
+		distance = countDistanceFromLatLon(ls[1][0], ls[1][1], ls[0][0], ls[0][1])
+		velocity = calcVelocity(distance, ls[1][2],ls[0][2])
+		data.append({ 
+			"esn" : esn[0], 
+			"start_timestamp" : ls[1][2],
+			"last_timestamp" : ls[0][2],
+			"start_latitude" : ls[1][0],
+			"start_longitude" : ls[1][1],
+			"end_latitude" : ls[0][0],
+			"end_longitude" : ls[0][1],
+			"distance" : round(distance*1000,2),
+			"velocity" : velocity
+		})
+	return { "data": data }
+
+@app.put("/update/is_read")
+def read_current_user(item: RangeRequest, username: str = Depends(get_current_username)):
+	is_read = flag_is_read(item.start_date, item.end_date)
+	description = "Writing data is failed"
+	if is_read == True :
+		description = "Writing data is success"
+	return {"status": is_read,"description": description}
 
 @app.put("/consume/all")
 def read_current_user(item: ItemRequest, username: str = Depends(get_current_username)):
